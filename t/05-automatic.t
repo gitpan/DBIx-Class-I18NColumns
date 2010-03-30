@@ -32,3 +32,20 @@ ok ( my $item_rs = $schema->resultset('Item') );
     is ( $item->string(['es']), 'futbol futbol futbol', 'Spanish string is ok forcing lang');
 }
 
+{
+    ok ( my $item = $item_rs->search({ language => 'en' })->single, 'Single item retrieved' );
+    is ( $item->string, 'test in english', 'English string is set ok');
+    is ( $item->string(['es']), 'futbol futbol futbol', 'Spanish string is ok forcing lang');
+
+    ok ( my @i18n_rows = $item->i18n_rows->all, 'Auto-created relation to auto-created RS exists' );
+    is ( scalar(@i18n_rows), 2, 'Relation to i18n rows returned two rows' );
+
+    ok ( $item->language('en_us'), 'Switch to american english' );
+    ok ( $item->string( "ain't problem here!" ), "Set string in american english" );
+    ok ( $item->text( "ain't problem here neither you!" ), "Set text in american english" );
+    ok ( $item->update, "Call update" );
+
+    ok ( my $i18n_row = $item->i18n_rows({ language => 'en_us' })->single, 'Retrieve american english i18n row' );
+    is ( $i18n_row->string, "ain't problem here!", 'Row string is ok!' );
+}
+

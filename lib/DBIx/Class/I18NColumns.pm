@@ -6,10 +6,10 @@ use base qw/DBIx::Class/;
 use Scalar::Util qw(blessed);
 use Class::C3::Componentised;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 __PACKAGE__->mk_classdata('_i18n_columns');
-__PACKAGE__->mk_group_accessors( 'simple' => qw/ language _i18n_column_data / );
+__PACKAGE__->mk_group_accessors( 'simple' => qw/ language _i18n_column_row / );
 
 =head1 NAME
 
@@ -77,7 +77,7 @@ Version 0.01
 
 This module allows you to define columns that will store multiple values asociated to a language string and use it as normal columns. This is useful when you need to internationalize attributes of your DB entities.
 
-This component will create a new resultset on your schema for each one that use it. Each i18n value will reside in a row of this resultset and will transparently work as any other column as long as you provide a language to your row or resultset methods as you can see at the synopsis.
+This component will create a new resultset on your schema for each one that use it. The auto-created resultset will use the columns definition you give to add_i18n_columns() plus a FK and language columns. The i18n values of each language will reside in a row of this resultset and will transparently work as any other column as long as you provide a language to your row or resultset methods as you can see at the synopsis.
 
 =head1 METHODS
 
@@ -86,8 +86,7 @@ This component will create a new resultset on your schema for each one that use 
 Create internationalizable columns. The columns are created in the same 
 way you do with in L<add_columns|DBIx::Class::ResultSource/add_columns>.
 
-Only text and varchar columns can be user. If you don't specify the data_type,
-varchar will be used by default.
+If you don't specify the data_type, varchar will be used by default.
 
 =cut
 sub add_i18n_columns {
@@ -96,7 +95,6 @@ sub add_i18n_columns {
 
     $self->_i18n_columns( {} ) unless defined $self->_i18n_columns();
     $self->resultset_class( 'DBIx::Class::ResultSet::I18NColumns' );
-    $self->_create_i18n_result_source if $self->auto_i18n_rs;
 
     # Add columns & accessors
     while ( my $column = shift @columns ) {
@@ -118,6 +116,8 @@ sub add_i18n_columns {
             $self->_i18n_method( $column => @_ );
         };
     }
+
+    $self->_create_i18n_result_source if $self->auto_i18n_rs;
 }
 
 =head2 i18n_resultset
@@ -144,6 +144,10 @@ In your result class that use this component:
 =cut
 
 sub auto_i18n_rs { 1 }
+
+=head2 i18n_rows
+
+A has_many relationship to the i18n resultset will be added to your RS if auto_i18n_rs is allowed.
 
 =head2 language_column
     
@@ -231,24 +235,22 @@ Overloaded L<DBIx::Class::Row/store_column> to manage i18n columns cleanly.
 =cut
 sub store_column {
     my ( $self, $column, $value ) = @_;
+    my $lang = $self->language;
 
-    $self->_i18n_column_data({}) unless $self->_i18n_column_data;
-    $self->_i18n_column_data->{$column} = {} unless exists $self->_i18n_column_data->{$column};
+    $self->_i18n_column_row( {} ) unless $self->_i18n_column_row;
 
     if ( $self->has_i18n_column($column) ) {
-        my $type = $self->_i18n_columns->{$column}{data_type};
-        if ( exists $self->_i18n_column_data->{$column}{ $self->language} ) {
-            return $self->_i18n_column_data->{$column}{ $self->language }
-                ->$type($value);
+        if ( my $i18n_row = $self->_i18n_column_row->{$lang} ) {
+            return $i18n_row->$column($value);
         }
         else {
-            return $self->_i18n_column_data->{$column}{ $self->language }
-                = $self->i18n_resultset->new({   
-                    $type                  => $value,
-                    $self->language_column => $self->language,
+            $self->_i18n_column_row->{$lang}
+                = $self->i18n_resultset->find_or_new({
+                    $self->language_column => $lang,
                     $self->foreign_column  => $self->id,
-                    attr                   => $column,
                 });
+
+            return $self->_i18n_column_row->{$lang}->$column($value);
         }
     }
 
@@ -264,21 +266,18 @@ sub get_column {
     my ( $self, $column ) = ( shift, shift );
     my $lang = $self->language;
 
-    $self->_i18n_column_data({}) unless $self->_i18n_column_data;
-    $self->_i18n_column_data->{$column} = {} unless exists $self->_i18n_column_data->{$column};
+    $self->_i18n_column_row({}) unless $self->_i18n_column_row;
 
     if ( $self->has_i18n_column($column) ) {
-        unless ( exists $self->_i18n_column_data->{$column}{$lang} ) {
-            $self->_i18n_column_data->{$column}{$lang} = 
+        unless ( exists $self->_i18n_column_row->{$lang} ) {
+            $self->_i18n_column_row->{$lang} = 
                 $self->i18n_resultset->find_or_new({   
-                    attr                   => $column,
-                    $self->language_column => $self->language,
+                    $self->language_column => $lang,
                     $self->foreign_column  => $self->id,
             });
         }
-
-        my $type = $self->_i18n_columns->{$column}{data_type};
-        return $self->_i18n_column_data->{$column}{$lang}->$type;
+        return $self->_i18n_column_row->{$lang}->$column;
+        #TODO: make accessor work !
     }
 
     return $self->next::method( $column, @_ );
@@ -294,12 +293,10 @@ sub update {
 
     $self->next::method( @_ );
 
-    if ( $self->_i18n_column_data ) {
-        for my $column ( keys %{$self->_i18n_column_data} ) {
-            for my $lang ( keys %{$self->_i18n_column_data->{$column}} ) {
-                my $i18n_row = $self->_i18n_column_data->{$column}{$lang};
-                $i18n_row->in_storage ? $i18n_row->update : $i18n_row->insert ;
-            }
+    if ( $self->_i18n_column_row ) {
+        for my $lang ( keys %{$self->_i18n_column_row} ) {
+            my $i18n_row = $self->_i18n_column_row->{$lang};
+            $i18n_row->in_storage ? $i18n_row->update : $i18n_row->insert ;
         }
     }
 
@@ -322,24 +319,25 @@ sub _create_i18n_result_source {
         my $fk_name = 'id_' . $tablename; 
         $class->add_columns(
             $fk_name,
-            { data_type => 'INT', default_value => 0, is_nullable => 0 },
+            { data_type => 'INT', default_value => 0, is_nullable => 0, is_foreign_key => 1 },
             'language',
             {
                 data_type     => 'VARCHAR',
                 default_value => '',
                 is_nullable   => 0,
-                size          => 2
+                size          => 5
             },
-            'attr',
-            { data_type => 'VARCHAR', is_nullable => 0, size => 32 },
-            'varchar',
-            { data_type => 'VARCHAR', is_nullable => 1, size => 255 },
-            'text',
-            { data_type => 'TEXT', is_nullable => 1 },
+            %{ $self->_i18n_columns }
         );
 
-        $class->set_primary_key( $fk_name, "language", "attr" );
+        $class->set_primary_key( $fk_name, "language" );
+        $class->belongs_to($fk_name, $self->result_class, { id => $fk_name });
         $self->schema_class->register_class( $self->_i18n_class_moniker => $class );
+
+        # Add a relationship to the just created RS to this RS.
+        $self->has_many( 'i18n_rows', $class, { 'foreign.' . $fk_name  => 'self.id' } );
+
+        #TODO: Add ddl hook for extra params like utf8
     }
     else {
         $self->throw_exception(
