@@ -6,7 +6,7 @@ use base qw/DBIx::Class/;
 use Scalar::Util qw(blessed);
 use Class::C3::Componentised;
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 __PACKAGE__->mk_classdata('_i18n_columns');
 __PACKAGE__->mk_group_accessors( 'simple' => qw/ language _i18n_column_row / );
@@ -311,6 +311,28 @@ sub update {
         for my $lang ( keys %{$self->_i18n_column_row} ) {
             my $i18n_row = $self->_i18n_column_row->{$lang};
             $i18n_row->in_storage ? $i18n_row->update : $i18n_row->insert ;
+        }
+    }
+
+    return $self;
+}
+
+=head2 insert
+
+Overloaded L<DBIx::Class::Row/insert> to manage i18n columns cleanly. 
+
+=cut
+sub insert {
+    my $self = shift;
+
+    $self->next::method( @_ );
+
+    if ( $self->_i18n_column_row ) {
+        for my $lang ( keys %{$self->_i18n_column_row} ) {
+            my $i18n_row = $self->_i18n_column_row->{$lang};
+            my $fk = $self->foreign_column;
+            $i18n_row->$fk( $self->id );
+            $i18n_row->insert;
         }
     }
 
