@@ -6,7 +6,7 @@ use base qw/DBIx::Class/;
 use Scalar::Util qw(blessed);
 use Class::C3::Componentised;
 
-our $VERSION = '0.08';
+our $VERSION = '0.09';
 
 __PACKAGE__->mk_classdata('_i18n_columns');
 __PACKAGE__->mk_group_accessors( 'simple' => qw/ language _i18n_column_row / );
@@ -17,7 +17,7 @@ DBIx::Class::I18NColumns - Internationalization for DBIx::Class Result class
 
 =head1 VERSION
 
-Version 0.08
+Version 0.09
 
 =cut
 
@@ -347,9 +347,8 @@ sub _create_i18n_result_source {
 
     if ( my $tablename = $self->table ) {
         my $class = $self->result_class . 'I18N';
-        Class::C3::Componentised->inject_base( $class, 'DBIx::Class' );
+        Class::C3::Componentised->inject_base( $class, 'DBIx::Class::Core' );
 
-        $class->load_components(qw/ Core /);
         $class->table( $tablename . '_i18n' );
         my $fk_name = 'id_' . $tablename; 
         $class->add_columns(
